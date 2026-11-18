@@ -268,12 +268,22 @@ class EngineTests(unittest.TestCase):
 class HelpersTests(unittest.TestCase):
     def test_official_order_not_lexical_title(self):
         def row(pid, cursor, title):
-            return dict(cursor_index=cursor,item=dict(product_id=pid,title=title,is_free=True))
-        rows=[row(10,1,'10화'),row(2,9,'2화'),row(1,10,'1화')]
+            return dict(cursor_index=cursor,item=dict(product_id=pid,title=title,is_free=True,order_value=pid))
+        rows=[row(10,10,'10화'),row(2,2,'2화'),row(1,1,'1화')]
         result=normalize_episodes(rows + [rows[0]])
         self.assertEqual([1,2,10],[r['pid'] for r in result])
         with self.assertRaises(Error):
-            normalize_episodes([row(1,1,'1'),row(2,1,'2')])
+            normalize_episodes([dict(cursor_index=1,item=dict(product_id=1,order_value=1)),
+                                dict(cursor_index=2,item=dict(product_id=2,order_value=1))])
+
+    def test_order_value_overrides_cursor_and_missing_order_stops(self):
+        rows = [dict(cursor_index=1,item=dict(product_id=30,order_value=3)),
+                dict(cursor_index=2,item=dict(product_id=20,order_value=2)),
+                dict(cursor_index=3,item=dict(product_id=10,order_value=1))]
+        self.assertEqual([10,20,30], [e['pid'] for e in normalize_episodes(rows)])
+        del rows[0]['item']['order_value']
+        with self.assertRaises(Error):
+            normalize_episodes(rows)
 
     def test_inline_text_and_image_marker(self):
         result=extract_paragraphs([{'type':'P','childParagraphList':[

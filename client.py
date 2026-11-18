@@ -1,8 +1,8 @@
 """카카오 웹 응답을 명시적으로 검사하는 소설 전용 어댑터.
 
 지원하지 않는 응답은 중단합니다. 유료 구매, 대기 시간 변경, DRM 해제는 하지 않습니다.
-통신 형태 참고: basilro/kaka_pe_dl 공개 커밋 c1e566a (2026-06-10 이전).
-현행 계정으로 실제 연동 검증이 필요한 초기 버전입니다.
+통신 형태 참고: basilro/kaka_pe_dl 및 murianwind/webtoon-manager.
+공개 무료 회차의 현행 응답 구조를 확인했습니다. 로그인 대여 연동은 별도 검증이 필요합니다.
 """
 import html
 import json
@@ -99,22 +99,23 @@ def availability(item):
 
 
 def normalize_episodes(rows):
-    """카카오 cursor_index 큰 값(오래된 회차)부터 정렬. 제목 숫자로 정렬하지 않음."""
+    """페이지 탐색 커서가 아닌 공식 order_value 오름차순으로 정렬."""
     episodes, seen = [], set()
     for row in rows:
         try:
             item = row['item']
             pid, cursor = int(item['product_id']), int(row['cursor_index'])
+            order = int(item['order_value'])
         except (KeyError, ValueError, TypeError):
             raise SchemaError('회차 ID 또는 공식 목록 순서가 없습니다. 처리를 중단합니다.') from None
         if pid in seen:
             continue
         seen.add(pid)
-        episodes.append(dict(pid=pid, cursor=cursor, title=str(item.get('title') or pid),
+        episodes.append(dict(pid=pid, cursor=cursor, order=order, title=str(item.get('title') or pid),
                              access=availability(item)))
-    if len({e['cursor'] for e in episodes}) != len(episodes):
+    if len({e['order'] for e in episodes}) != len(episodes):
         raise SchemaError('공식 목록 순서가 중복됩니다. 회차를 임의 정렬하지 않습니다.')
-    episodes.sort(key=lambda e: e['cursor'], reverse=True)
+    episodes.sort(key=lambda e: e['order'])
     for number, ep in enumerate(episodes, 1):
         ep['number'] = number
     return episodes
@@ -165,7 +166,7 @@ class Client:
             raise SchemaError('카카오 API JSON 응답 확인 실패 (%s).' % path) from None
         if (isinstance(body, dict) and 'result_code' not in body
                 and path == '/api/gateway/api/v1/viewer/data'
-                and isinstance(body.get('viewerData'), dict)):
+                and any(isinstance(body.get(key), dict) for key in ('viewer_data', 'viewerData'))):
             return body
         if not isinstance(body, dict) or 'result_code' not in body:
             raise SchemaError('카카오 API 응답 확인 실패 (%s): result_code가 없거나 객체 형식이 아닙니다.' % path)
@@ -187,7 +188,7 @@ class Client:
         path = '/api/gateway/api/v2/content/product/list'
         def fetch(cursor, direction, size=25):
             return self.result(path, params=dict(series_id=sid, cursor_index=cursor,
-                cursor_direction=direction, window_size=size, sort_type='desc'))
+                cursor_direction=direction, window_size=size, sort_type='asc'))
         anchor = fetch(0, 'ANCHOR', 6)
         meta = anchor.get('series_item') or {}
         if meta.get('category') not in ('웹소설', '소설'):
@@ -238,6 +239,10 @@ class Client:
 
     def content_json(self, url):
         u = urlparse(url)
+        # API가 http CDN 주소를 주기도 한다. 서명 경로/쿼리를 유지해 HTTPS로 요청.
+        if u.scheme == 'http' and u.port is None:
+            u = u._replace(scheme='https')
+            url = u.geturl()
         host = u.hostname or ''
         allowed = ('kakao.com', 'kakaoentcdn.com', 'kakaocdn.net', 'kakaopage.com')
         if (u.scheme != 'https' or u.username or u.password or u.port not in (None, 443)
@@ -265,19 +270,27 @@ class Client:
     def text(self, sid, pid):
         body = self.api('/api/gateway/api/v1/viewer/data',
                         params=dict(series_id=sid, product_id=pid))
-        viewer = body.get('viewerData') or {}
-        if viewer.get('type') != 'TextViewerData':
+        # 현재 API는 snake_case이며 type이 없다. 기존 camelCase 응답도 지원한다.
+        viewer = body.get('viewer_data', body.get('viewerData'))
+        if not isinstance(viewer, dict):
+            raise SchemaError('본문 API에 viewer_data / viewerData 객체가 없습니다.')
+        if viewer.get('type') not in (None, 'TextViewerData') or 'imageDownloadData' in viewer:
             raise SchemaError('텍스트 뷰어 형식이 아닙니다. 이미지·암호화 콘텐츠는 처리하지 않습니다.')
-        contents, server = viewer.get('contentsList'), viewer.get('atsServerUrl')
+        contents = viewer.get('contents_list', viewer.get('contentsList'))
+        server = viewer.get('ats_server_url', viewer.get('atsServerUrl'))
         if not isinstance(contents, list) or not contents or not isinstance(server, str):
-            raise SchemaError('소설 본문 목록이 올바르지 않습니다.')
+            raise SchemaError('소설 본문 목록(contents_list) 또는 서버 주소(ats_server_url)가 없습니다.')
         paragraphs = []
         for part in contents:
-            secure = part.get('secureUrl')
+            secure = part.get('secure_url', part.get('secureUrl')) if isinstance(part, dict) else None
             if not isinstance(secure, str) or not secure:
                 raise SchemaError('일부 본문 주소가 없습니다. 불완전한 회차는 저장하지 않습니다.')
-            data = self.content_json(server + secure)
-            nodes = (data.get('contentInfo') or {}).get('paragraphList')
+            # secure_url은 상대 경로뿐 아니라 '.json?...' 같은 접미사일 수 있다.
+            # 서버가 준 서명 URL을 경로 정규화하거나 임의의 '/'를 삽입하지 않는다.
+            url = secure if secure.startswith(('https://', 'http://')) else server + secure
+            data = self.content_json(url)
+            info = data.get('contentInfo') if isinstance(data, dict) else None
+            nodes = info.get('paragraphList') if isinstance(info, dict) else None
             if not isinstance(nodes, list):
                 raise SchemaError('소설 단락 목록이 없습니다.')
             paragraphs.extend(extract_paragraphs(nodes))
@@ -296,5 +309,8 @@ def extract_paragraphs(nodes):
             return '[삽화]'
         if kind == 'BR':
             return '\n'
-        return ''.join(inline(n) for n in node.get('childParagraphList') or [])
+        text = ''.join(inline(n) for n in node.get('childParagraphList') or [])
+        if kind in ('P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'LI'):
+            return text.rstrip() + '\n\n'
+        return text
     return [line for line in (inline(node).strip() for node in nodes) if line]

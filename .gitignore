@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.db*
+*.lock
+*cookie*.json
+downloads/
+.venv/

@@ -4,9 +4,10 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import Mock
 from xml.etree import ElementTree
 
-from kakao_novel_downloader.client import Error, TicketUncertain, normalize_episodes, extract_paragraphs, parse_cookies, series_id
+from kakao_novel_downloader.client import Error, AuthError, SchemaError, TicketUncertain, normalize_episodes, extract_paragraphs, parse_cookies, series_id
 from kakao_novel_downloader.core import Engine, config
 from kakao_novel_downloader.storage import atomic_bytes
 
@@ -147,6 +148,33 @@ class EngineTests(unittest.TestCase):
         self.run_once()
         self.assertEqual([2], self.client.ticket_calls)
         self.assertEqual('completed', self.engine.episode_record(123, 2)['status'])
+
+    def test_open_schema_failure_fetches_text_without_second_ticket(self):
+        self.register(2, 2)
+        self.client.open_rental = Mock(side_effect=SchemaError('unexpected envelope'))
+        self.client.fail_text.add(2)
+        self.run_once()
+        self.assertEqual('rented', self.engine.episode_record(123, 2)['status'])
+        self.assertEqual([], list((self.root / 'output').rglob('*.txt')))
+        self.engine = Engine(self.root / 'db.sqlite', lambda *a, **kw: self.client)
+        self.client.fail_text.clear()
+        self.run_once()
+        self.assertEqual([2], self.client.ticket_calls)
+        self.assertEqual('completed', self.engine.episode_record(123, 2)['status'])
+        self.assertEqual('caught_up', self.work()['status'])
+
+    def test_open_explicit_denial_does_not_fetch_text(self):
+        self.register(2, 2)
+        for exc in (AuthError('expired'), Error('denied')):
+            self.client.open_rental = Mock(side_effect=exc)
+            if isinstance(exc, AuthError):
+                with self.assertRaises(AuthError):
+                    self.run_once()
+            else:
+                self.run_once()
+            self.assertEqual([], self.client.text_calls)
+            self.assertEqual('rented', self.engine.episode_record(123, 2)['status'])
+        self.assertEqual([2], self.client.ticket_calls)
 
     def test_missing_completed_file_never_spends_new_ticket_automatically(self):
         self.register()

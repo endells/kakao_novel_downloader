@@ -26,6 +26,19 @@ class ClientTests(unittest.TestCase):
         self.response({'result':{}})
         with self.assertRaises(SchemaError):self.client.tickets(1)
 
+    def test_open_missing_result_code_identifies_endpoint(self):
+        self.response({'result': {}})
+        with self.assertRaisesRegex(SchemaError, 'open_page'):
+            self.client.open_rental(1, 2, 'test-ticket')
+
+    def test_viewer_without_result_code_is_valid_but_denial_is_not(self):
+        path = '/api/gateway/api/v1/viewer/data'
+        self.response({'viewerData': {'type': 'TextViewerData'}})
+        self.assertIn('viewerData', self.client.api(path))
+        self.response({'result_code': -100, 'viewerData': {}})
+        with self.assertRaises(AuthError):
+            self.client.api(path)
+
     def test_ticket_request_only_rt05_and_not_retried(self):
         self.response({'result_code':0,'result':{'ticket_uid':'test'}})
         self.client.rent_waitfree(7)

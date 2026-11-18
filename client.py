@@ -162,13 +162,13 @@ class Client:
         try:
             body = json.loads(r.content)
         except (ValueError, TypeError):
-            raise SchemaError('카카오 API가 JSON 응답을 반환하지 않았습니다.') from None
+            raise SchemaError('카카오 API JSON 응답 확인 실패 (%s).' % path) from None
         if (isinstance(body, dict) and 'result_code' not in body
                 and path == '/api/gateway/api/v1/viewer/data'
                 and isinstance(body.get('viewerData'), dict)):
             return body
         if not isinstance(body, dict) or 'result_code' not in body:
-            raise SchemaError('카카오 API 응답 형식이 변경되었습니다.')
+            raise SchemaError('카카오 API 응답 확인 실패 (%s): result_code가 없거나 객체 형식이 아닙니다.' % path)
         code = body['result_code']
         if code == -100:
             raise AuthError('카카오 인증이 만료되었습니다. 로그인 쿠키를 갱신하세요.')

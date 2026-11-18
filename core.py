@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from .client import Client, Error, AuthError, TicketUncertain, KST, series_id
+from .client import Client, Error, AuthError, SchemaError, TicketUncertain, KST, series_id
 from .storage import atomic_bytes, build_epub, digest, safe_name
 
 
@@ -353,9 +353,14 @@ class Engine:
                     self.event(sid, '기다무 사용: ' + ep['title'])
             # 완료/대여 기록의 파일이 없더라도 접근권이 있으면 이용권 없이 복구 가능.
             row = self.episode_record(sid, ep['pid'])
-            if row and row.get('ticket_uid') and row['status'] == 'rented':
-                cli.open_rental(sid, ep['pid'], row['ticket_uid'])
             try:
+                if row and row.get('ticket_uid') and row['status'] == 'rented':
+                    try:
+                        cli.open_rental(sid, ep['pid'], row['ticket_uid'])
+                    except SchemaError:
+                        # 열람 알림의 응답 형식만 불명확한 경우 본문 API로 접근권 확인.
+                        # 인증 실패/명시적 거부/통신 오류는 그대로 중단한다.
+                        self.event(sid, '대여 후 열람 응답 형식 확인 불가 (open_page) — 본문 접근 확인: ' + ep['title'], 'warning')
                 text = cli.text(sid, ep['pid'])
                 # PID 포함으로 동명 외전·제목 변경 충돌 방지.
                 path = folder / ('%05d_%s [%s].txt' % (ep['number'], safe_name(ep['title']), ep['pid']))

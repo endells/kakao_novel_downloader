@@ -68,6 +68,17 @@ class AdapterTests(unittest.TestCase):
     def test_csrf_rejects_missing_or_wrong_token(self):
         result=self.call('status',token='')
         self.assertEqual(403,result[1])
+
+    def test_folder_dialog_uses_existing_parent_without_saving(self):
+        existing=Path(self.tmp.name)/'한글 폴더'
+        existing.mkdir()
+        result=self.call('browse_path',str(existing/'새 폴더'/'소설')).get_json()
+        self.assertEqual('success',result['ret'])
+        self.assertEqual(str(existing),result['path'])
+        self.assertFalse((existing/'새 폴더').exists())
+        self.assertNotIn('download_path',self.P.ModelSetting.values)
+        self.assertEqual(str(existing),self.call('browse_path',str(existing)).get_json()['path'])
+        self.assertEqual('error',self.call('browse_path','relative/path').get_json()['ret'])
         result=self.call('status',valid=False)
         self.assertEqual(403,result[1])
 

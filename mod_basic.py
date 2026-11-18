@@ -1,4 +1,5 @@
 import json
+import os
 import secrets
 from pathlib import Path
 
@@ -74,6 +75,16 @@ class ModuleBasic(PluginModuleBase):
         if req is None or req.method != 'POST' or not expected or not secrets.compare_digest(expected, given):
             return jsonify(ret='error', msg='페이지를 새로고침한 후 다시 시도하세요.'), 403
         try:
+            if command == 'browse_path':
+                path = Path(os.path.normpath(str(arg1 or '/').strip() or '/'))
+                if not path.is_absolute():
+                    raise Error('폴더 선택은 /로 시작하는 컨테이너 내부 경로를 입력하세요.')
+                # 아직 생성되지 않은 저장 폴더는 접근 가능한 상위 폴더에서 탐색합니다.
+                while not (path.is_dir() and os.access(str(path), os.R_OK | os.X_OK)):
+                    if path == path.parent:
+                        raise Error('열 수 있는 상위 폴더가 없습니다. FF 폴더 접근 권한을 확인하세요.')
+                    path = path.parent
+                return jsonify(ret='success', path=str(path))
             if command == 'status':
                 return jsonify(ret='success', **self.engine.snapshot(),
                                scheduled=F.scheduler.is_include(self.get_scheduler_name()))

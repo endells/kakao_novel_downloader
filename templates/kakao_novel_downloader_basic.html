@@ -11,7 +11,7 @@
 .kn-actions{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.kn-pill{background:#8882;border-radius:20px;padding:3px 10px;font-size:12px}.kn-scroll{overflow:auto;max-height:520px}.kn table{width:100%;font-size:13px;min-width:650px}.kn th,.kn td{padding:10px 9px;text-align:left;border-bottom:1px solid #8883}.kn th{font-size:12px;opacity:.7}.kn td small{display:block;opacity:.7}.kn-work-title{font-size:18px;font-weight:700}.kn-muted{opacity:.7}.kn-log{font-family:monospace;font-size:12px;white-space:pre-wrap;max-height:260px;overflow:auto}.kn-warning{border-left:4px solid #edba35;padding:10px 14px;background:#eabc2512}.kn-msg{padding:12px 16px;border-radius:8px;background:#4687c222;margin-bottom:14px;white-space:pre-wrap}.kn-msg.error{background:#d94e4e22}.kn [hidden]{display:none!important}
 </style>
 <div class="kn">
-  <div class="kn-hero"><small>PERSONAL NOVEL LIBRARY · v0.1.0</small><h2>카카오소설 다운로더</h2><p>원하는 회차부터 차근차근. 기다무 충전 후 다음 회차를 이어받습니다.</p></div>
+  <div class="kn-hero"><small>PERSONAL NOVEL LIBRARY · v0.1.1</small><h2>카카오소설 다운로더</h2><p>원하는 회차부터 차근차근. 기다무 충전 후 다음 회차를 이어받습니다.</p></div>
   <div class="kn-nav">
     {% for key,label in [('works','내 작품 / 진행'),('add','작품 등록 / 수동'),('setting','설정 / 스케줄'),('history','이력 / 오류')] %}
     <a href="/{{ package_name }}/basic/{{ key }}" class="{{ 'active' if page==key else '' }}">{{ label }}</a>
@@ -32,7 +32,7 @@
     <div class="kn-scroll"><table><thead><tr><th>목록 순번</th><th>회차 제목</th><th>접근 상태</th><th></th></tr></thead><tbody id="episodes"></tbody></table></div>
   </div>
   {% elif page == 'setting' %}
-  <form id="settings"><div class="kn-card"><h4>저장 설정</h4><label for="download_path">저장 폴더</label><div class="kn-actions"><input type="text" id="download_path" style="flex:1" value="{{ cfg.download_path }}"><button type="button" id="folder" class="kn-btn">폴더 선택</button></div><p class="kn-help">FF 컨테이너 내부 경로를 지정하세요. NAS /volume1 폴더를 /downloads로 연결했다면 /downloads를 입력합니다.</p>
+  <form id="settings"><div class="kn-card"><h4>저장 설정</h4><label for="download_path">다운로드 경로</label><div class="kn-actions"><input type="text" id="download_path" style="flex:1" value="{{ cfg.download_path }}"><button type="button" id="folder" class="kn-btn">경로 선택</button></div><p class="kn-help">경로 선택으로 폴더를 찾은 뒤 아래의 <strong>설정 저장</strong>을 누르세요. 직접 입력도 가능합니다.</p><p class="kn-help">FF 도커에 연결된 폴더만 보입니다. NAS 폴더가 목록에 없으면 Container Manager 또는 Portainer의 FF 볼륨 연결을 확인하세요.</p><p class="kn-help">FF 컨테이너 내부 경로를 지정하세요. NAS /volume1 폴더를 /downloads로 연결했다면 /downloads를 입력합니다.</p>
   <div class="kn-grid"><div><label for="max_per_title">작품당 실행 최대 회차</label><input type="number" min="1" max="500" id="max_per_title" value="{{ cfg.max_per_title }}"></div><div><label for="basic_interval">자동 확인 간격 (분)</label><input type="number" min="10" max="10080" id="basic_interval" value="{{ cfg.basic_interval }}"></div></div><br>
   <label><input type="checkbox" id="make_epub" {{ 'checked' if cfg.make_epub == 'True' else '' }}> 받은 TXT로 합본 EPUB 생성</label><label><input type="checkbox" id="basic_auto_start" {{ 'checked' if cfg.basic_auto_start == 'True' else '' }}> 자동 확인 사용 / FF 재시작 후 자동 등록</label><p class="kn-help">자동 확인 간격은 기다무 충전 시간을 바꾸지 않습니다. 마지막 완료 회차와 이용권 처리 기록은 재시작 후에도 유지됩니다.</p></div>
   <div class="kn-card"><h4>카카오페이지 로그인 쿠키</h4><p id="cookie-status">{{ '쿠키 저장됨 · 새 값을 입력하지 않으면 유지됩니다.' if cookie_saved else '저장된 쿠키가 없습니다.' }}</p>
@@ -98,7 +98,7 @@ async function history(){const rows=(await call('history',$id('history-sid').val
 bind('run-all',async()=>{notice((await call('run')).msg);await update();});bind('stop',async()=>{notice((await call('stop')).msg);await update();});
 bind('analyze',async()=>{notice('작품과 전체 회차 목록을 확인 중입니다.');showAnalysis((await call('analyze',$id('work-url').value.trim())).data);notice('분석 완료. 시작 회차를 확인한 후 저장하세요.');});
 bind('register',()=>register(false));bind('register-run',()=>register(true));
-bind('folder',async()=>{if(typeof globalSelectLocalFolder!=='function')throw new Error('이 FF 버전은 폴더 선택 창을 제공하지 않습니다. 경로를 직접 입력하세요.');globalSelectLocalFolder('소설 저장 폴더',$id('download_path').value||'/',p=>$id('download_path').value=p);});
+bind('folder',async()=>{if(typeof globalSelectLocalFolder!=='function')throw new Error('이 FF 버전은 폴더 선택 창을 제공하지 않습니다. 경로를 직접 입력하세요.');const data=await call('browse_path',$id('download_path').value.trim()||'/');globalSelectLocalFolder('다운로드 폴더',data.path,p=>{if(typeof p!=='string'||!p.trim())return;$id('download_path').value=p.trim();notice('폴더를 선택했습니다. 설정 저장을 눌러 적용하세요.');});});
 bind('verify',async()=>notice((await call('verify',$id('verify-sid').value.trim())).msg));
 bind('history-refresh',history);
 if(page==='setting')$id('settings').addEventListener('submit',async event=>{event.preventDefault();const btn=event.submitter||$id('settings').querySelector('[type=submit]');await task(btn,async()=>{const raw={};for(const k of ['download_path','max_per_title','basic_interval','cookie'])raw[k]=$id(k).value;for(const k of ['make_epub','basic_auto_start','clear_cookie'])raw[k]=$id(k).checked;const result=await call('save',JSON.stringify(raw));$id('cookie').value='';$id('clear_cookie').checked=false;$id('cookie-status').textContent=result.cookie_saved?'쿠키 저장됨':'저장된 쿠키가 없습니다.';notice(result.msg);});});

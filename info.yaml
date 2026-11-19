@@ -1,6 +1,6 @@
 package_name: kakao_novel_downloader
 title: 카카오소설 다운로더
 description: 작품별 시작 회차부터 기다무를 순차 사용하는 소설 전용 다운로더
-version: 0.2.1
+version: 0.2.2
 developer: endells
 home: https://github.com/endells/kakao_novel_downloader

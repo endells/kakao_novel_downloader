@@ -12,7 +12,7 @@
 .kn-guide{border:1px solid #8884;border-radius:8px;padding:16px;margin:12px 0 20px}.kn-guide p{margin:8px 0}.kn-current{padding:10px 12px;border-left:3px solid #e4bd38;background:#e4bd3810;white-space:pre-wrap}.kn #copy-editor h5{margin-top:24px;font-weight:700}.kn-guide code{color:inherit;overflow-wrap:anywhere}.kn #copy-editor .kn-help{font-size:14px;opacity:.88}
 </style>
 <div class="kn">
-  <div class="kn-hero"><small>PERSONAL NOVEL LIBRARY · v0.2.1</small><h2>카카오소설 다운로더</h2><p>원하는 회차부터 차근차근. 기다무 충전 후 다음 회차를 이어받습니다.</p></div>
+  <div class="kn-hero"><small>PERSONAL NOVEL LIBRARY · v0.2.2</small><h2>카카오소설 다운로더</h2><p>원하는 회차부터 차근차근. 기다무 충전 후 다음 회차를 이어받습니다.</p></div>
   <div class="kn-nav">
     {% for key,label in [('works','내 작품 / 진행'),('add','작품 등록 / 수동'),('copy','시즌별 파일 복사'),('setting','설정 / 스케줄'),('history','이력 / 오류')] %}
     <a href="/{{ package_name }}/basic/{{ key }}" class="{{ 'active' if page==key else '' }}">{{ label }}</a>
@@ -79,7 +79,15 @@
     <p id="copy-range-current" class="kn-current" aria-live="polite"></p>
     <p class="kn-help">예: 원본 1500~1510번만 복사하려면 시작 1500, 끝 1510을 입력합니다. ‘1500번 → 시즌 304화’로 보정한 경우 복사본은 304~314화가 됩니다. 시작 1500, 끝 0이면 원본 1500번부터 이후 파일도 대상입니다.</p>
     <h5>3. 복사본 파일명 모양 정하기</h5>
-    <label for="copy-preset">자주 쓰는 파일명 형식</label><select id="copy-preset"><option value="">선택하면 아래 파일명 규칙에 적용됩니다</option><option value="{episode:05d}_{subtitle}.txt">5자리 회차 번호_회차 제목</option><option value="{episode:03d}화 {subtitle}.txt">3자리 회차 번호 + 화 + 회차 제목</option><option value="{title} 시즌{season} {episode}화.txt">작품명 + 시즌 + 회차</option><option value="{episode:04d}.txt">4자리 회차 번호만</option></select>
+    <label for="copy-preset">자주 쓰는 파일명 형식</label><select id="copy-preset"><option value="">선택하면 아래 파일명 규칙에 적용됩니다</option><option value="{episode:05d}_{subtitle}.txt">회차 번호_회차 제목</option><option value="{episode:05d}_{title}.txt">회차 번호_작품명</option><option value="{episode:03d}화 {subtitle}.txt">회차 번호 + 화 + 회차 제목</option><option value="{title} 시즌{season} {episode}화.txt">작품명 + 시즌 + 회차</option><option value="{episode:04d}.txt">회차 번호만</option></select>
+    <label for="copy-number_digits">회차 번호 자릿수</label>
+    <select id="copy-number_digits" aria-describedby="copy-digits-example">
+      <option value="">규칙에 직접 지정됨</option><option value="0">앞에 0 붙이지 않기</option>
+      <option value="1">최소 1자리</option><option value="2">최소 2자리</option><option value="3">최소 3자리</option>
+      <option value="4">최소 4자리</option><option value="5" selected>최소 5자리</option><option value="6">최소 6자리</option><option value="7">최소 7자리</option><option value="8">최소 8자리</option>
+    </select>
+    <p id="copy-digits-example" class="kn-current" aria-live="polite"></p>
+    <p class="kn-help">선택하면 아래 파일명 규칙의 회차 번호 자릿수만 바뀌며, 작품명·회차 제목 등 나머지 부분은 유지됩니다. 304화는 3자리 → 304, 4자리 → 0304, 5자리 → 00304입니다. 실제 번호가 선택한 자릿수보다 길면 자르지 않습니다. 예: 2자리로 설정해도 304화는 304입니다. 선택 후 <strong>규칙 저장</strong>을 누르면 다음 자동 복사에도 적용됩니다. 이미 복사한 파일의 이름은 바꾸지 않습니다.</p>
     <label for="copy-filename_template">파일명 규칙 (직접 수정 가능)</label><input id="copy-filename_template" type="text" value="{episode:05d}_{subtitle}.txt">
     <p class="kn-help">중괄호 부분은 파일마다 실제 값으로 바뀝니다. <code>{episode:05d}</code>는 회차 번호를 최소 5자리로 표시한다는 뜻입니다. 회차가 12이면 00012, 304이면 00304가 됩니다. 3자리로 맞추려면 <code>{episode:03d}</code>를 사용하세요.</p>
     <div class="kn-guide"><strong>이름 규칙별 설명용 예시</strong><p class="kn-help">작품명 ‘예시 소설’, 시즌 2, 회차 12, 회차 제목 ‘새로운 시작’인 파일을 가정합니다. 실제 결과는 아래 ‘복사 미리보기’로 확인하세요.</p>
@@ -182,7 +190,24 @@ if(page==='copy'){
   const defaults={sid:56505778,title:'천재 궁수의 스트리밍',season:5,source_path:'',destination_path:'',folder_template:'',filename_template:'{episode:05d}_{subtitle}.txt',mode:'title',anchor_source:1,anchor_episode:1,start_number:0,end_number:0,enabled:false,match_existing:true};
   function rawRule(){const raw={id:ruleId};for(const k of fields)raw[k]=numberFields.includes(k)?Number($id('copy-'+k).value):$id('copy-'+k).value;for(const k of ['enabled','match_existing'])raw[k]=$id('copy-'+k).checked;return raw;}
   function fillRule(rule){ruleId=rule.id||null;for(const k of fields)$id('copy-'+k).value=rule[k];for(const k of ['enabled','match_existing'])$id('copy-'+k).checked=!!rule[k];$id('copy-rows').replaceChildren();$id('copy-summary').textContent='미리보기로 원본과 복사본 이름을 확인하세요.';$id('copy-preset').value='';updateCopyHelp();}
+  // 중괄호를 이스케이프한 리터럴은 바꾸지 않고 회차 변수만 수정합니다.
+  const episodeTokens=()=>/(?<!\{)\{episode(?::(?:0?[1-8]d|d))?\}(?!\})/g;
+  function applyDigits(width){
+    if(!/^[0-8]$/.test(width))return;
+    const token=width==='0'?'{episode}':'{episode:0'+width+'d}';
+    $id('copy-filename_template').value=$id('copy-filename_template').value.replace(episodeTokens(),token);
+  }
+  function syncDigits(){
+    const tokens=$id('copy-filename_template').value.match(episodeTokens())||[];
+    const widths=tokens.map(t=>{if(t==='{episode}'||t==='{episode:d}')return '0';const m=t.match(/^\{episode:0([1-8])d\}$/);return m?m[1]:'';});
+    const width=widths.length&&widths.every(w=>w===widths[0])?widths[0]:'';
+    const select=$id('copy-number_digits');select.value=width;select.disabled=copyBusy||!tokens.length;
+    $id('copy-digits-example').textContent=!tokens.length?'현재 규칙에 회차 번호가 없습니다. 위에서 회차 번호가 포함된 파일명 형식을 선택하세요.':width===''?'현재 파일명 규칙을 직접 지정한 상태입니다. 자릿수를 선택하면 모든 회차 번호 변수에 동일하게 적용됩니다.':'현재 자릿수 예시: 12화 → '+String(12).padStart(Number(width),'0')+' / 304화 → '+String(304).padStart(Number(width),'0');
+  }
+  $id('copy-number_digits').addEventListener('change',()=>{applyDigits($id('copy-number_digits').value);syncDigits();});
+  $id('copy-filename_template').addEventListener('input',syncDigits);
   function updateCopyHelp(){
+    syncDigits();
     const offset=$id('copy-mode').value==='offset';
     $id('copy-title-help').hidden=offset;$id('copy-offset-help').hidden=!offset;
     for(const k of ['anchor_source','anchor_episode'])$id('copy-'+k).disabled=copyBusy||!offset;
@@ -205,7 +230,7 @@ if(page==='copy'){
   async function progress(){try{const result=await call('status'),s=result.state;$id('copy-progress').textContent=(s.active?'진행 중 · ':'')+s.message;$id('copy-stop').disabled=!s.active;copyBusy=s.active;$id('copy-editor').querySelectorAll('input,select').forEach(el=>el.disabled=s.active);updateCopyHelp();$id('copy-rules').disabled=s.active;for(const id of ['copy-run','copy-save','copy-delete','copy-preview'])$id(id).disabled=s.active;$id('copy-logs').textContent=result.logs.map(r=>time(r.time)+' ['+r.level+'] '+r.message).join('\n');if(wasActive&&!s.active)await preview();wasActive=s.active;}catch(e){notice(e.message,true);}}
   for(const [buttonId,inputId] of [['copy-source-folder','copy-source_path'],['copy-target-folder','copy-destination_path']])bind(buttonId,async()=>{if(typeof globalSelectLocalFolder!=='function')throw new Error('경로를 직접 입력하세요.');const r=await call('browse_path',$id(inputId).value.trim()||'/');globalSelectLocalFolder('복사 폴더 선택',r.path,p=>{if(typeof p==='string'&&p.trim()){$id(inputId).value=p.trim();updateCopyHelp();}});});
   $id('copy-rules').addEventListener('change',()=>{const r=rules.find(r=>String(r.id)===$id('copy-rules').value);fillRule(r||defaults);});
-  $id('copy-preset').addEventListener('change',()=>{if($id('copy-preset').value)$id('copy-filename_template').value=$id('copy-preset').value;});
+  $id('copy-preset').addEventListener('change',()=>{if($id('copy-preset').value){const width=$id('copy-number_digits').value;$id('copy-filename_template').value=$id('copy-preset').value;applyDigits(width);syncDigits();}});
   bind('copy-new',async()=>{fillRule(defaults);$id('copy-rules').value='';});
   bind('copy-preview',preview);bind('copy-save',saveRule);
   bind('copy-run',async()=>{const r=await saveRule();notice((await call('copy_run',r.id)).msg);wasActive=true;await progress();});

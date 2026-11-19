@@ -61,7 +61,7 @@ class ModuleBasic(PluginModuleBase):
                 self.engine.event(None, str(exc), 'warning')
 
     def process_menu(self, sub, req):
-        if sub not in ('works', 'add', 'setting', 'history'):
+        if sub not in ('works', 'add', 'copy', 'setting', 'history'):
             sub = 'works'
         if not session.get('kakao_novel_csrf'):
             session['kakao_novel_csrf'] = secrets.token_urlsafe(32)
@@ -85,6 +85,23 @@ class ModuleBasic(PluginModuleBase):
                         raise Error('열 수 있는 상위 폴더가 없습니다. FF 폴더 접근 권한을 확인하세요.')
                     path = path.parent
                 return jsonify(ret='success', path=str(path))
+            if command == 'copy_list':
+                return jsonify(ret='success', rules=self.engine.copier.rules())
+            if command == 'copy_save':
+                with self.engine.operation():
+                    rule = self.engine.copier.save(json.loads(arg1 or '{}'))
+                return jsonify(ret='success', rule=rule, msg='복사 규칙을 저장했습니다.')
+            if command == 'copy_preview':
+                with self.engine.operation():
+                    result = self.engine.copier.preview(json.loads(arg1 or '{}'))
+                return jsonify(ret='success', **result)
+            if command == 'copy_run':
+                self.engine.start_copy(int(arg1))
+                return jsonify(ret='success', msg='기존 TXT 복사를 시작했습니다. 아래 진행 상태를 확인하세요.')
+            if command == 'copy_remove':
+                with self.engine.operation():
+                    self.engine.copier.remove(int(arg1))
+                return jsonify(ret='success', msg='복사 규칙만 삭제했습니다. 원본과 복사본은 유지됩니다.')
             if command == 'status':
                 return jsonify(ret='success', **self.engine.snapshot(),
                                scheduled=F.scheduler.is_include(self.get_scheduler_name()))

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .client import Client, Error, AuthError, SchemaError, TicketUncertain, KST, series_id
 from .storage import atomic_bytes, build_epub, digest, safe_name
+from .copying import Copier
 
 
 DEFAULTS = {'download_path': '', 'basic_auto_start': 'False', 'basic_interval': '30',
@@ -67,6 +68,8 @@ class Engine:
                     id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, sid INTEGER,
                     level TEXT NOT NULL, message TEXT NOT NULL);
             ''')
+
+        self.copier = Copier(self)
 
     @contextmanager
     def connect(self):
@@ -230,6 +233,40 @@ class Engine:
             guard.__exit__(None, None, None)
             raise
 
+    def start_copy(self, rule_id):
+        guard = self.operation()
+        guard.__enter__()
+        try:
+            rule = self.copier.get(rule_id)
+            if rule is None:
+                raise Error('먼저 복사 규칙을 저장하세요.')
+            self.stop_event.clear()
+            with self.lock:
+                self.state.update(status='running', message='기존 TXT 복사 중', sid=rule['sid'],
+                                  episode='', completed=0, started=now(), finished='')
+            def work():
+                try:
+                    result = self.copier.execute(rule)
+                    with self.lock:
+                        self.state.update(status='done', message='복사 작업 종료 — 미리보기와 이력에서 결과를 확인하세요.',
+                                          completed=result['counts'].get('copied', 0))
+                except Exception as exc:
+                    msg = str(exc) if isinstance(exc, Error) else '복사 작업 실패: ' + type(exc).__name__
+                    self.event(rule['sid'], msg, 'error')
+                    with self.lock:
+                        self.state.update(status='error', message=msg)
+                finally:
+                    with self.lock:
+                        if self.stop_event.is_set():
+                            self.state.update(status='stopped', message='복사 중지 — 다시 실행하면 이어갑니다.')
+                        self.state['finished'] = now()
+                    guard.__exit__(None, None, None)
+            self.thread = threading.Thread(target=work, name='kakao-file-copy', daemon=True)
+            self.thread.start()
+        except Exception:
+            guard.__exit__(None, None, None)
+            raise
+
     def stop(self):
         self.stop_event.set()
 
@@ -270,6 +307,9 @@ class Engine:
                     msg = str(exc) if isinstance(exc, Error) else '저장 경로 오류: 권한과 디스크 공간을 확인하세요.'
                     self.set_work(sid, 'error', msg)
                     self.event(sid, msg, 'error')
+                finally:
+                    # 다운로드 실패/충전 대기 때도 저장 완료된 원본은 복사 가능하다.
+                    self.copier.automatic(sid)
         finally:
             cli.close()
 

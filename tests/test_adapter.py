@@ -103,8 +103,26 @@ class AdapterTests(unittest.TestCase):
         self.assertFalse(self.framework.F.scheduler.jobs)
         self.assertEqual('error',self.call('unexpected').get_json()['ret'])
 
+    def test_copy_rules_preview_and_background_do_not_require_cookie(self):
+        source=Path(self.tmp.name)/'source';source.mkdir()
+        (source/'00120_시즌5 304화 예시.txt').write_text('example')
+        rule=dict(source_path=str(source),destination_path=self.tmp.name+'/copy')
+        preview=self.call('copy_preview',json.dumps(rule)).get_json()
+        self.assertEqual(1,preview['counts']['copy'])
+        self.assertFalse(Path(rule['destination_path']).exists())
+        result=self.call('copy_save',json.dumps(rule)).get_json()
+        self.assertEqual('success',result['ret'])
+        self.assertFalse(self.mod.cookie_path.exists())
+        rule_id=result['rule']['id']
+        self.assertEqual('success',self.call('copy_run',str(rule_id)).get_json()['ret'])
+        self.mod.engine.thread.join(5)
+        self.assertTrue((Path(rule['destination_path'])/'00304_예시.txt').is_file())
+        self.assertEqual(1,len(self.call('copy_list').get_json()['rules']))
+        self.assertEqual('success',self.call('copy_remove',str(rule_id)).get_json()['ret'])
+        self.assertEqual([],self.call('copy_list').get_json()['rules'])
+
     def test_all_templates_render_and_script_parses(self):
-        for page in ('works','add','setting','history'):
+        for page in ('works','add','copy','setting','history'):
             with self.app.test_request_context('/'):
                 output=self.mod.process_menu(page,request)
             self.assertIn('카카오소설 다운로더',output)

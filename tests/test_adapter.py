@@ -121,8 +121,35 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual('success',self.call('copy_remove',str(rule_id)).get_json()['ret'])
         self.assertEqual([],self.call('copy_list').get_json()['rules'])
 
+    def test_schedule_logs_disabled_busy_and_missing_cookie(self):
+        self.mod.scheduler_function()
+        self.P.ModelSetting.set('basic_auto_start', 'True')
+        self.mod.engine.active=True
+        self.mod.scheduler_function()
+        self.mod.engine.active=False
+        self.mod.scheduler_function()
+        data=self.call('logs','schedule').get_json()
+        messages=' '.join(r['message'] for r in data['rows'])
+        self.assertIn('자동 확인 꺼짐',messages)
+        self.assertIn('다른 작업 진행 중',messages)
+        self.assertIn('시작 실패',messages)
+        self.assertEqual(3,messages.count('호출됨'))
+
+    def test_scheduler_empty_run_has_start_and_end_logs(self):
+        from test_core import FakeClient
+        self.P.ModelSetting.set('basic_auto_start', 'True')
+        self.mod.engine.client_factory=FakeClient
+        with patch.object(self.mod,'read_cookie',return_value='fake'):
+            self.mod.scheduler_function()
+        self.mod.engine.thread.join(5)
+        self.assertFalse(self.mod.engine.active)
+        messages=' '.join(r['message'] for r in self.call('logs').get_json()['rows'])
+        self.assertIn('[스케줄] 작업 시작',messages)
+        self.assertIn('[스케줄] 작업 종료',messages)
+        self.assertIn('실행 대상 작품 0개',messages)
+
     def test_all_templates_render_and_script_parses(self):
-        for page in ('works','add','copy','setting','history'):
+        for page in ('works','add','copy','setting','history','logs'):
             with self.app.test_request_context('/'):
                 output=self.mod.process_menu(page,request)
             self.assertIn('카카오소설 다운로더',output)

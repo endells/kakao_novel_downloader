@@ -39,12 +39,14 @@ class ModuleBasic(PluginModuleBase):
             job = Job(self.P.package_name, name, str(cfg['basic_interval']),
                       self.scheduler_function, '카카오소설 기다무 순차 다운로드')
             F.scheduler.add_job_instance(job, run=False)
+        self.engine.event(None, '[스케줄] ' + ('등록: %s분 간격' % cfg['basic_interval'] if cfg['basic_auto_start'] else '자동 확인 꺼짐'))
 
     def plugin_load(self):
         try:
             self.sync_schedule(config(self.raw_config()))
         except Exception as exc:
             self.P.logger.warning('카카오소설 스케줄 등록 실패: %s', type(exc).__name__)
+            self.engine.event(None, '[스케줄] 등록 실패: ' + type(exc).__name__, 'error')
 
     def plugin_unload(self):
         self.engine.stop()
@@ -53,15 +55,21 @@ class ModuleBasic(PluginModuleBase):
 
     def scheduler_function(self):
         with F.app.app_context():
+            self.engine.event(None, '[스케줄] 호출됨')
             try:
                 cfg = config(self.raw_config())
-                if cfg['basic_auto_start']:
-                    self.engine.start(cfg, self.read_cookie())
-            except Error as exc:
-                self.engine.event(None, str(exc), 'warning')
+                if not cfg['basic_auto_start']:
+                    self.engine.event(None, '[스케줄] 건너뜀: 자동 확인 꺼짐')
+                    return
+                if self.engine.active:
+                    self.engine.event(None, '[스케줄] 건너뜀: 다른 작업 진행 중', 'warning')
+                    return
+                self.engine.start(cfg, self.read_cookie(), source='스케줄')
+            except Exception as exc:
+                self.engine.event(None, '[스케줄] 시작 실패: ' + (str(exc) if isinstance(exc, Error) else type(exc).__name__), 'error')
 
     def process_menu(self, sub, req):
-        if sub not in ('works', 'add', 'copy', 'setting', 'history'):
+        if sub not in ('works', 'add', 'copy', 'setting', 'history', 'logs'):
             sub = 'works'
         if not session.get('kakao_novel_csrf'):
             session['kakao_novel_csrf'] = secrets.token_urlsafe(32)
@@ -102,6 +110,15 @@ class ModuleBasic(PluginModuleBase):
                 with self.engine.operation():
                     self.engine.copier.remove(int(arg1))
                 return jsonify(ret='success', msg='복사 규칙만 삭제했습니다. 원본과 복사본은 유지됩니다.')
+            if command == 'logs':
+                with self.engine.connect() as db:
+                    rows = [dict(r) for r in db.execute(
+                        "SELECT * FROM logs WHERE (?='' OR message LIKE ?) ORDER BY id DESC LIMIT 1000",
+                        ('schedule' if arg1 == 'schedule' else '', '%[스케줄]%' if arg1 == 'schedule' else '%'))]
+                return jsonify(ret='success', rows=rows,
+                    scheduled=F.scheduler.is_include(self.get_scheduler_name()),
+                    enabled=config(self.raw_config())['basic_auto_start'],
+                    interval=config(self.raw_config())['basic_interval'], active=self.engine.active)
             if command == 'status':
                 return jsonify(ret='success', **self.engine.snapshot(),
                                scheduled=F.scheduler.is_include(self.get_scheduler_name()))

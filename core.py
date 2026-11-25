@@ -119,6 +119,7 @@ class Engine:
             state = dict(self.state, active=self.active)
         with self.connect() as db:
             works = [dict(r) for r in db.execute('SELECT * FROM works ORDER BY title,sid')]
+            self.event(None, '실행 대상 작품 %s개' % len(works))
             for work in works:
                 work['completed'] = db.execute("SELECT COUNT(*) FROM episodes WHERE sid=? AND status='completed'",
                                                (work['sid'],)).fetchone()[0]
@@ -217,7 +218,7 @@ class Engine:
         except OSError:
             return False
 
-    def start(self, cfg, cookie, only_sid=None):
+    def start(self, cfg, cookie, only_sid=None, source="수동"):
         # 스레드 생성 전에 작업 잠금을 확보해 동시에 들어온 시작 명령도 막음.
         guard = self.operation()
         guard.__enter__()
@@ -227,7 +228,7 @@ class Engine:
                 self.state.update(status='running', message='작업 시작', completed=0,
                                   started=now(), finished='', sid=None, episode='')
             self.thread = threading.Thread(target=self._background,
-                args=(guard, dict(cfg), cookie, only_sid), name='kakao-novel', daemon=True)
+                args=(guard, dict(cfg), cookie, only_sid, source), name='kakao-novel', daemon=True)
             self.thread.start()
         except Exception:
             guard.__exit__(None, None, None)
@@ -270,12 +271,13 @@ class Engine:
     def stop(self):
         self.stop_event.set()
 
-    def _background(self, guard, cfg, cookie, only_sid):
+    def _background(self, guard, cfg, cookie, only_sid, source="수동"):
         try:
+            self.event(None, '[%s] 작업 시작' % source)
             self.run(cfg, cookie, only_sid)
         except Exception as exc:
             msg = str(exc) if isinstance(exc, Error) else '내부 오류: ' + type(exc).__name__
-            self.event(None, msg, 'error')
+            self.event(None, '[%s] %s' % (source, msg), 'error')
             with self.lock:
                 self.state.update(status='error', message=msg)
         finally:
@@ -284,7 +286,10 @@ class Engine:
                     self.state.update(status='stopped' if self.stop_event.is_set() else 'done',
                                       message='중지됨' if self.stop_event.is_set() else '이번 실행 종료 — 작품별 상태를 확인하세요.')
                 self.state['finished'] = now()
-            guard.__exit__(None, None, None)
+            try:
+                self.event(None, '[%s] 작업 종료: %s · 저장 %s개 (작품별 결과는 로그 확인)' % (source, self.state['status'], self.state['completed']))
+            finally:
+                guard.__exit__(None, None, None)
 
     def run(self, cfg, cookie, only_sid=None):
         cli = self.client_factory(cookie, stop=self.stop_event)
@@ -292,6 +297,7 @@ class Engine:
             with self.connect() as db:
                 works = [dict(r) for r in db.execute('SELECT * FROM works WHERE '
                     '(? IS NULL AND enabled=1) OR sid=? ORDER BY sid', (only_sid, only_sid))]
+            self.event(None, '실행 대상 작품 %s개' % len(works))
             for work in works:
                 if self.stop_event.is_set():
                     break
@@ -310,6 +316,10 @@ class Engine:
                 finally:
                     # 다운로드 실패/충전 대기 때도 저장 완료된 원본은 복사 가능하다.
                     self.copier.automatic(sid)
+                    with self.connect() as db:
+                        result = db.execute('SELECT status,message FROM works WHERE sid=?', (sid,)).fetchone()
+                    if result:
+                        self.event(sid, '작품 점검 결과: %s · %s' % (result['status'], result['message']))
         finally:
             cli.close()
 

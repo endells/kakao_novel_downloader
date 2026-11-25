@@ -161,4 +161,98 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(0,completed.returncode,completed.stderr)
 
 
+class CookieRefreshTests(unittest.TestCase):
+    tearDown = AdapterTests.tearDown
+    call = AdapterTests.call
+
+    def setUp(self):
+        AdapterTests.setUp(self)
+        self.cookie = '[{"name":"_kau","value":"old-secret","domain":".kakao.com"}]'
+        self.mod.cookie_path.write_text(self.cookie)
+
+    def test_refresh_reloads_attributes_and_never_logs_values(self):
+        import requests
+        cli = self.mod.make_client(self.cookie)
+        cli.session.cookies.set('_kau', 'new-secret', domain='.kakao.com', path='/',
+                                secure=True, expires=2100000000)
+        cli.persist_cookies()
+        cli.close()
+        saved = self.mod.read_cookie()
+        self.assertIn('new-secret', saved)
+        self.assertEqual(0o600, self.mod.cookie_path.stat().st_mode & 0o777)
+        next_client = self.mod.make_client(saved)
+        c = next(c for c in next_client.session.cookies if c.name == '_kau')
+        self.assertEqual(('new-secret', True, 2100000000), (c.value,c.secure,c.expires))
+        next_client.close()
+        rows = self.call('logs').get_json()['rows']
+        self.assertEqual(1, len(rows))
+        self.assertNotIn('secret', json.dumps(rows))
+
+    def test_deletion_and_unrelated_domain_not_persisted(self):
+        cli = self.mod.make_client(self.cookie)
+        cli.session.cookies.clear('.kakao.com', '/', '_kau')
+        cli.session.cookies.set('other', 'private', domain='example.com')
+        cli.close()
+        self.assertEqual([], json.loads(self.mod.read_cookie()))
+
+    def test_manual_replacement_or_removal_not_overwritten(self):
+        for replacement in ('new manual cookie', None):
+            self.mod.cookie_path.write_text(self.cookie)
+            cli = self.mod.make_client(self.cookie)
+            cli.session.cookies.set('_kau', 'refreshed', domain='.kakao.com')
+            if replacement is None:
+                self.mod.cookie_path.unlink()
+            else:
+                self.mod.cookie_path.write_text(replacement)
+            cli.close()
+            if replacement is None:
+                self.assertFalse(self.mod.cookie_path.exists())
+            else:
+                self.assertEqual(replacement, self.mod.read_cookie())
+
+    def test_save_failure_preserves_old_cookie_and_retries(self):
+        cli = self.mod.make_client(self.cookie)
+        cli.session.cookies.set('_kau', 'refreshed', domain='.kakao.com')
+        with patch('kakao_novel_downloader.mod_basic.atomic_bytes', side_effect=OSError('secret')):
+            cli.persist_cookies()
+            self.assertEqual(self.cookie, self.mod.read_cookie())
+        cli.close()
+        self.assertIn('refreshed', self.mod.read_cookie())
+        messages = json.dumps(self.call('logs').get_json(), ensure_ascii=False)
+        self.assertIn('자동 저장 실패', messages)
+        self.assertNotIn('secret', messages)
+
+    def test_response_error_still_persists_refresh(self):
+        from unittest.mock import Mock
+        from kakao_novel_downloader.client import AuthError
+        cli = self.mod.make_client(self.cookie)
+        cli._pace = lambda: None
+        def response(*args, **kwargs):
+            cli.session.cookies.set('_kau','refreshed',domain='.kakao.com')
+            return Mock(status_code=401)
+        with patch.object(cli.session,'request',side_effect=response):
+            with self.assertRaises(AuthError):
+                cli.api('/test')
+        self.assertIn('refreshed', self.mod.read_cookie())
+        cli.close()
+
+    def test_expiry_secure_and_host_only_roundtrip(self):
+        import requests
+        cli = self.mod.make_client(self.cookie)
+        c = requests.cookies.create_cookie('test', 'value', domain='page.kakao.com',
+            path='/api', secure=True, expires=2100000000, rest={'HttpOnly':None,'SameSite':'Lax'})
+        c.domain_specified=False
+        cli.session.cookies.set_cookie(c)
+        cli.session.cookies.set('expired','discard',domain='.kakao.com',expires=1)
+        cli.close()
+        next_client=self.mod.make_client(self.mod.read_cookie())
+        c=next(c for c in next_client.session.cookies if c.name=='test')
+        self.assertFalse(c.domain_specified)
+        self.assertTrue(c.secure)
+        self.assertEqual('/api',c.path)
+        self.assertEqual('Lax',c._rest['SameSite'])
+        self.assertNotIn('expired',[c.name for c in next_client.session.cookies])
+        next_client.close()
+
+
 if __name__=='__main__':unittest.main()

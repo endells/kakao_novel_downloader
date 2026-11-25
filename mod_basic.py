@@ -19,6 +19,7 @@ class ModuleBasic(PluginModuleBase):
         super().__init__(P, name='basic', first_menu='works', scheduler_desc='카카오소설 기다무 순차 다운로드')
         self.engine = Engine(Path(F.config['path_data']) / 'db' / 'kakao_novel_downloader.db')
         self.cookie_path = self.engine.db_path.parent / 'kakao_novel_downloader_cookie.json'
+        self.engine.client_factory = self.make_client
 
     def raw_config(self):
         values = {k: self.P.ModelSetting.get(k) or v for k, v in DEFAULTS.items()}
@@ -30,6 +31,30 @@ class ModuleBasic(PluginModuleBase):
             return self.cookie_path.read_text(encoding='utf-8')
         except OSError:
             raise Error('설정에서 로그인 쿠키를 먼저 저장하세요.') from None
+
+    def make_client(self, cookie, **kwargs):
+        expected = cookie
+        failed = False
+
+        def save_refreshed(current):
+            nonlocal expected, failed
+            try:
+                # 모든 호출은 엔진의 작업 잠금 안에서 실행합니다.
+                # 새로 입력하거나 지운 쿠키를 이전 세션이 덮어쓰지 않습니다.
+                if self.cookie_path.read_text(encoding='utf-8') != expected:
+                    return False
+                atomic_bytes(self.cookie_path, current.encode('utf-8'), 0o600)
+                expected = current
+                failed = False
+            except OSError:
+                if not failed:
+                    self.engine.event(None, '[쿠키] 자동 저장 실패: 저장 경로와 권한을 확인하세요.', 'warning')
+                    failed = True
+                return False
+            self.engine.event(None, '[쿠키] 서버 갱신 내용 자동 저장 완료 · 다음 실행부터 사용')
+            return True
+
+        return Client(cookie, on_cookies=save_refreshed, **kwargs)
 
     def sync_schedule(self, cfg):
         name = self.get_scheduler_name()
@@ -154,7 +179,7 @@ class ModuleBasic(PluginModuleBase):
                 return jsonify(ret='success', msg='EPUB 저장: ' + path if path else '검증된 TXT 파일이 없습니다.')
             if command == 'verify':
                 with self.engine.operation():
-                    cli = Client(self.read_cookie())
+                    cli = self.make_client(self.read_cookie())
                     try:
                         cli.tickets(series_id(arg1))
                     finally:

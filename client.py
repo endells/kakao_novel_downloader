@@ -70,8 +70,22 @@ def parse_cookies(raw):
             raise Error('쿠키 이름과 값은 문자열이어야 합니다.')
         if any(c in name + value for c in '\r\n\x00'):
             raise Error('쿠키에 잘못된 문자가 있습니다.')
-        clean.append(dict(name=name, value=value, domain=domain,
-                          path=row.get('path') or '/'))
+        item = dict(name=name, value=value, domain=domain, path=row.get('path') or '/')
+        # Cookie-Editor와 자동 저장 파일 양쪽의 만료/보안 속성을 유지합니다.
+        expiry = row.get('expires', row.get('expirationDate'))
+        if expiry is not None:
+            try:
+                item['expires'] = int(expiry)
+            except (TypeError, ValueError, OverflowError):
+                raise Error('쿠키 만료 시각 형식이 올바르지 않습니다.') from None
+        for key in ('secure', 'discard'):
+            if key in row:
+                item[key] = row[key] is True
+        if 'rest' in row and isinstance(row['rest'], dict):
+            item['rest'] = {k: v for k, v in row['rest'].items() if k in ('HttpOnly', 'SameSite')}
+        if row.get('hostOnly') is True:
+            item['hostOnly'] = True
+        clean.append(item)
     if not any(c['name'] == '_kau' for c in clean):
         raise AuthError('로그인 쿠키 _kau가 없습니다. 카카오페이지 로그인 후 다시 내보내세요.')
     return clean
@@ -122,21 +136,53 @@ def normalize_episodes(rows):
 
 
 class Client:
-    def __init__(self, cookie_json, session=None, stop=None):
+    def __init__(self, cookie_json, session=None, stop=None, on_cookies=None):
         self.session = session or requests.Session()
         self.stop = stop
+        self.on_cookies = on_cookies
         self.device = ''
         self.session.headers.update({'User-Agent': 'Mozilla/5.0',
             'Accept': 'application/json', 'Origin': PAGE, 'Referer': PAGE + '/',
             'Accept-Language': 'ko-KR,ko;q=0.9'})
         for cookie in parse_cookies(cookie_json):
-            self.session.cookies.set(**cookie)
+            host_only = cookie.pop('hostOnly', False)
+            if host_only:
+                restored = requests.cookies.create_cookie(**cookie)
+                restored.domain_specified = False
+                self.session.cookies.set_cookie(restored)
+            else:
+                self.session.cookies.set(**cookie)
             if cookie['name'] == '_kpdid':
                 self.device = cookie['value']
         self.last_request = 0
+        self.saved_cookies = self.cookie_snapshot() if on_cookies else None
+
+    def cookie_snapshot(self):
+        rows = []
+        for cookie in self.session.cookies:
+            host = cookie.domain.lstrip('.').lower()
+            if host != 'kakao.com' and not host.endswith('.kakao.com'):
+                continue
+            if cookie.is_expired():
+                continue
+            rows.append(dict(name=cookie.name, value=cookie.value, domain=cookie.domain,
+                path=cookie.path, expires=cookie.expires, secure=cookie.secure,
+                discard=cookie.discard, hostOnly=not cookie.domain_specified,
+                rest={k: v for k, v in cookie._rest.items() if k in ('HttpOnly', 'SameSite')}))
+        return json.dumps(sorted(rows, key=lambda c: (c['domain'], c['path'], c['name'])),
+                          ensure_ascii=False, sort_keys=True)
+
+    def persist_cookies(self):
+        if self.on_cookies is not None:
+            current = self.cookie_snapshot()
+            if current != self.saved_cookies and self.on_cookies(current):
+                self.saved_cookies = current
 
     def close(self):
-        self.session.close()
+        try:
+            self.persist_cookies()
+        finally:
+            self.session.close()
 
     def _pace(self):
         delay = max(0, 0.5 - (time.monotonic() - self.last_request))
@@ -154,6 +200,8 @@ class Client:
                 params=params, data=data, timeout=(10, 30), allow_redirects=False)
         except requests.RequestException:
             raise Error('네트워크 연결 실패 또는 응답 시간 초과입니다.') from None
+        # requests가 Set-Cookie를 반영한 직후 저장: 이후 본문 오류가 나도 갱신을 보존합니다.
+        self.persist_cookies()
         if r.status_code in (401, 403):
             raise AuthError('로그인 만료 또는 접근 거부입니다. 쿠키와 계정 상태를 확인하세요.')
         if r.status_code == 429:

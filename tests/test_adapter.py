@@ -146,7 +146,18 @@ class AdapterTests(unittest.TestCase):
         messages=' '.join(r['message'] for r in self.call('logs').get_json()['rows'])
         self.assertIn('[스케줄] 작업 시작',messages)
         self.assertIn('[스케줄] 작업 종료',messages)
-        self.assertIn('실행 대상 작품 0개',messages)
+        self.assertNotIn('실행 대상 작품',messages)
+
+    def test_status_polling_does_not_write_logs_and_hides_old_count_messages(self):
+        self.mod.engine.event(None, '실행 대상 작품 1개')
+        self.mod.engine.event(None, '[스케줄] 작업 시작')
+        self.mod.engine.event(123, '쿠키 갱신이 필요합니다.', 'error')
+        before = self.call('logs').get_json()['rows']
+        for _ in range(4):
+            data = self.call('status').get_json()
+            self.assertNotIn('실행 대상 작품', ' '.join(r['message'] for r in data['logs']))
+            self.assertEqual(2, len(data['logs']))
+        self.assertEqual(before, self.call('logs').get_json()['rows'])
 
     def test_all_templates_render_and_script_parses(self):
         for page in ('works','add','copy','setting','history','logs'):

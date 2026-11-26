@@ -119,11 +119,11 @@ class Engine:
             state = dict(self.state, active=self.active)
         with self.connect() as db:
             works = [dict(r) for r in db.execute('SELECT * FROM works ORDER BY title,sid')]
-            self.event(None, '실행 대상 작품 %s개' % len(works))
             for work in works:
                 work['completed'] = db.execute("SELECT COUNT(*) FROM episodes WHERE sid=? AND status='completed'",
                                                (work['sid'],)).fetchone()[0]
-            logs = [dict(r) for r in db.execute('SELECT * FROM logs ORDER BY id DESC LIMIT 100')]
+            logs = [dict(r) for r in db.execute("SELECT * FROM logs WHERE NOT (sid IS NULL AND level='info' "
+                "AND message LIKE '실행 대상 작품 %개') ORDER BY id DESC LIMIT 100")]
         return dict(state=state, works=works, logs=logs)
 
     def history(self, sid=None):
@@ -297,7 +297,6 @@ class Engine:
             with self.connect() as db:
                 works = [dict(r) for r in db.execute('SELECT * FROM works WHERE '
                     '(? IS NULL AND enabled=1) OR sid=? ORDER BY sid', (only_sid, only_sid))]
-            self.event(None, '실행 대상 작품 %s개' % len(works))
             for work in works:
                 if self.stop_event.is_set():
                     break
